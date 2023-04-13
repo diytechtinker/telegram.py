@@ -7,6 +7,7 @@ import subprocess
 import telegram
 import json
 import telegram.ext as tg
+import pwnagotchi
 import pwnagotchi.plugins as plugins
 from pwnagotchi.voice import Voice
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -17,7 +18,7 @@ class Telegram(plugins.Plugin):
     __version__ = '0.0.9'
     __license__ = 'GPL3'
     __description__ = 'Chats to telegram'
-    __dependencies__ = 'python-telegram-bot==13.15',
+    __dependencies__ = 'python-telegram-bot==13.15'
 
     def on_loaded(self):
         logging.info("telegram plugin loaded.")
@@ -27,6 +28,7 @@ class Telegram(plugins.Plugin):
         self.updater = None  # Add this line to initialize the updater attribute
         self.start_menu_sent = False
         self.last_try_time = 0
+        self.messages_sent = 0
 
     def on_agent(self, agent):
         if 'auto_start' in self.options and self.options['auto_start']:
@@ -82,7 +84,8 @@ class Telegram(plugins.Plugin):
     def shutdown(self, agent, update, context):
         response = "Shutting down now..."
         update.effective_message.reply_text(response)
-        subprocess.run(['sudo', 'shutdown', '-h', 'now'])
+        pwnagotchi.shutdown()
+        #subprocess.run(['sudo', 'shutdown', '-h', 'now'])
 
     def uptime(self, agent, update, context):
         with open('/proc/uptime', 'r') as f:
@@ -94,6 +97,7 @@ class Telegram(plugins.Plugin):
 
         response = f"Uptime: {uptime_hours} hours and {uptime_remaining_minutes} minutes"
         update.effective_message.reply_text(response)
+        self.messages_sent += 1
 
         # Increment the number of completed tasks and check if all tasks are completed
         self.completed_tasks += 1
@@ -159,6 +163,8 @@ class Telegram(plugins.Plugin):
         response = f"Total handshakes captured: {count}"
         update.effective_message.reply_text(response)
 
+        self.messages_sent += 1
+
         # Increment the number of completed tasks and check if all tasks are completed
         self.completed_tasks += 1
         if self.completed_tasks == self.num_tasks:
@@ -168,12 +174,16 @@ class Telegram(plugins.Plugin):
         # Send message about Bluetooth Sniffed that is New or Updated
         self.bt_sniff_message(agent)
 
-        if hasattr(self, 'telegram_connected') and self.telegram_connected:
+        if hasattr(self, 'telegram_connected') and self.telegram_connected and self.messages_sent < 10:
             return  # Skip if already connected
 
         config = agent.config()
         display = agent.view()
         last_session = agent.last_session
+
+        if self.messages_sent > 10:
+            self.start_menu_sent = False
+            self.messages_sent = 0
 
         try:
             logging.info("Connecting to Telegram...")
@@ -256,6 +266,7 @@ class Telegram(plugins.Plugin):
         config = agent.config()
         display = agent.view()
         current_time = time.time()
+        changed = False
         try:
             bts_timer = self.options['bts_timer']
         except Exception:
@@ -265,7 +276,7 @@ class Telegram(plugins.Plugin):
         except Exception:
             bts_json_file = '/root/handshakes/bluetooth_devices.json'
         # Checking the time elapsed since last scan
-        if os.path.exists(bts_json_file) and os.path.getsize(bts_json_file) != 0:
+        if os.path.exists(bts_json_file):
             if current_time - self.last_try_time >= bts_timer:
                 logging.info("[BtST] Trying to check BT json...")
                 self.last_try_time = current_time
@@ -274,33 +285,39 @@ class Telegram(plugins.Plugin):
                     with open(bts_json_file, 'r') as f:
                         bluetooth_data = json.load(f)
                     # check if there is any new info
-                    for mac in bluetooth_data:
-                        if bluetooth_data[mac]['new_info'] == True:
-                            logging.info("[BtST] Connecting to Telegram...")
-                            bot = telegram.Bot(self.options['bot_token'])
-                            message = f"New Bluetooth device detected:\n\nName: {bluetooth_data[mac]['name']}\nMAC: {mac}\nManufacturer: {bluetooth_data[mac]['manufacturer']}\nFirst Seen: {bluetooth_data[mac]['first_seen']}\nLast Seen: {bluetooth_data[mac]['last_seen']}"
-                            logging.info("[BtST] Sending: %s" % message)
-                            bot.sendMessage(chat_id=self.options['chat_id'], text=message, disable_web_page_preview=True)
-                            bluetooth_data[mac]['new_info'] = False
-                            with open(bts_json_file, 'w') as f:
-                                json.dump(bluetooth_data, f)
-                            logging.info("[BtST] telegram: message sent: %s" % message)
-                            display.set('status', 'Telegram notification for Bluetooth sent!')
-                            display.update(force=True)
-                        elif bluetooth_data[mac]['new_info'] == 2:
-                            logging.info("[BtST] Connecting to Telegram...")
-                            bot = telegram.Bot(self.options['bot_token'])
-                            message = f"Bluetooth device updated:\n\nName: {bluetooth_data[mac]['name']}\nMAC: {mac}\nManufacturer: {bluetooth_data[mac]['manufacturer']}\nFirst Seen: {bluetooth_data[mac]['first_seen']}\nLast Seen: {bluetooth_data[mac]['last_seen']}"
-                            logging.info("[BtST] Sending: %s" % message)
-                            bot.sendMessage(chat_id=self.options['chat_id'], text=message, disable_web_page_preview=True)
-                            bluetooth_data[mac]['new_info'] = False
-                            with open(bts_json_file, 'w') as f:
-                                json.dump(bluetooth_data, f)
-                            logging.info("[BtST] telegram: message sent: %s" % message)
-                            display.set('status', 'Telegram notification for Bluetooth sent!')
-                            display.update(force=True)
+                    if len(bluetooth_data) > 0:
+                        for mac in bluetooth_data:
+                            if bluetooth_data[mac]['new_info'] == True:
+                                logging.info("[BtST] Connecting to Telegram...")
+                                bot = telegram.Bot(self.options['bot_token'])
+                                message = f"New Bluetooth device detected:\n\nName: {bluetooth_data[mac]['name']}\nMAC: {mac}\nManufacturer: {bluetooth_data[mac]['manufacturer']}\nFirst Seen: {bluetooth_data[mac]['first_seen']}\nLast Seen: {bluetooth_data[mac]['last_seen']}"
+                                logging.info("[BtST] Sending: %s" % message)
+                                bot.sendMessage(chat_id=self.options['chat_id'], text=message, disable_web_page_preview=True)
+                                logging.info("[BtST] telegram: message sent: %s" % message)
+                                display.set('status', 'Telegram notification for Bluetooth sent!')
+                                display.update(force=True)
+                                bluetooth_data[mac]['new_info'] = False
+                                changed = True
+                            elif bluetooth_data[mac]['new_info'] == 2:
+                                logging.info("[BtST] Connecting to Telegram...")
+                                bot = telegram.Bot(self.options['bot_token'])
+                                message = f"Bluetooth device updated:\n\nName: {bluetooth_data[mac]['name']}\nMAC: {mac}\nManufacturer: {bluetooth_data[mac]['manufacturer']}\nFirst Seen: {bluetooth_data[mac]['first_seen']}\nLast Seen: {bluetooth_data[mac]['last_seen']}"
+                                logging.info("[BtST] Sending: %s" % message)
+                                bot.sendMessage(chat_id=self.options['chat_id'], text=message, disable_web_page_preview=True)
+                                logging.info("[BtST] telegram: message sent: %s" % message)
+                                display.set('status', 'Telegram notification for Bluetooth sent!')
+                                display.update(force=True)
+                                bluetooth_data[mac]['new_info'] = False
+                                changed = True
                 except Exception:
                     logging.exception("[BtST] Error while sending Bluetooth data on Telegram")
+                    changed = False
+
+                if changed:
+                    with open(bts_json_file, 'w') as f:
+                        json.dump(bluetooth_data, f)
+                        self.messages_sent += 1
+
 
     def bt_sniff_info(self, agent, update, context):
         logging.info("[BtST] Reading JSON file...")
@@ -308,17 +325,23 @@ class Telegram(plugins.Plugin):
             bts_json_file = self.options['bts_json_file']
         except Exception:
             bts_json_file = '/root/handshakes/bluetooth_devices.json'
-        if os.path.exists(bts_json_file) and os.path.getsize(bts_json_file) != 0:
+        if os.path.exists(bts_json_file):
             with open(bts_json_file, 'r') as f:
                 bluetooth_data = json.load(f)
             num_devices = len(bluetooth_data)
-            num_unknown = sum(1 for device in bluetooth_data.values() if device['name'] == 'Unknown' or device['manufacturer'] == 'Unknown')
-            num_known = num_devices - num_unknown
+            if num_devices > 0:
+                num_unknown = sum(1 for device in bluetooth_data.values() if device['name'] == 'Unknown' or device['manufacturer'] == 'Unknown')
+                num_known = num_devices - num_unknown
+            else:
+                num_unknown = 0
+                num_known = 0
             response = f"Bluetooth Sniffed Info\n\nAll of them: %s\nFully sniffed: %s" % (num_devices, num_known)
             logging.info("[BtST] Telegram message: %s" % response)
         else:
             response = f"[BtST] Plugin bluetoothsniffer is not loaded."
         update.effective_message.reply_text(response)
+
+        self.messages_sent += 1
 
         # Increment the number of completed tasks and check if all tasks are completed
         self.completed_tasks += 1
